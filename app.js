@@ -1,63 +1,73 @@
-const express = require('express')
-const app = express()
-const PORT = 5000
+require('dotenv').config('.env');
+const cors = require('cors');
+const express = require('express');
+const app = express();
+const morgan = require('morgan');
+const { Snippet } = require('./db');
 
-app.use(express.json())
+// middleware
+app.use(cors());
+app.use(morgan('dev'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// array to store snippets
-const snippets = require('./seedData.json')
+const {
+  AUTH0_SECRET,
+  AUTH0_BASE_URL = 'http://localhost:5000',
+  AUTH0_CLIENT_ID,
+  AUTH0_ISSUER_BASE_URL,
+} = process.env;
 
-// generate a unique ID for each snippet
-let id = snippets.length
+const config = {
+  authRequired: true,
+  auth0Logout: true,
+  secret: AUTH0_SECRET,
+  baseURL: AUTH0_BASE_URL,
+  clientID: AUTH0_CLIENT_ID,
+  issuerBaseURL: AUTH0_ISSUER_BASE_URL,
+};
 
-// create a new snippet
-app.post('/snippet', (req, res) => {
-  const { language, code } = req.body
+const { auth } = require('express-openid-connect');
 
-  // basic validation
-  if (!language || !code) {
-    return res
-      .status(400)
-      .json({ error: 'Language and code are required fields' })
+// auth router attaches /login, /logout, and /callback routes to the baseURL
+app.use(auth(config));
+
+// req.isAuthenticated is provided from the auth router
+app.get('/', (req, res) => {
+  console.log(req.oidc.user);
+  res.send(req.oidc.isAuthenticated() ? 'Logged in' : 'Logged out');
+});
+
+app.get('/snippets', async (req, res, next) => {
+  try {
+    const snippets = await Snippet.findAll();
+    res.send(snippets);
+  } catch (error) {
+    console.error(error);
+    next(error);
   }
+});
 
-  const snippet = {
-    id: id++,
-    language,
-    code
+app.post('/snippets', async (req, res, next) => {
+  try {
+    const { language, code } = req.body;
+    const snippet = await Snippet.create({ language, code });
+    res.status(201).json(snippet);
+  } catch (error) {
+    console.error(error);
+    next(error);
   }
+});
 
-  snippets.push(snippet)
-  res.status(201).json(snippet)
-})
+// error handling middleware
+app.use((error, req, res, next) => {
+  console.error('SERVER ERROR: ', error);
+  if (res.statusCode < 400) res.status(500);
+  res.send({ error: error.message, name: error.name, message: error.message });
+});
 
-// get all snippets
-app.get('/snippet', (req, res) => {
-  const { lang } = req.query
+const PORT = process.env.PORT || 5000;
 
-  if (lang) {
-    const filteredSnippets = snippets.filter(
-      snippet => snippet.language.toLowerCase() === lang.toLowerCase()
-    )
-    return res.json(filteredSnippets)
-  }
-
-  res.json(snippets)
-})
-
-// get a snippet by ID
-app.get('/snippet/:id', (req, res) => {
-  const snippetId = parseInt(req.params.id)
-  const snippet = snippets.find(snippet => snippet.id === snippetId)
-
-  if (!snippet) {
-    return res.status(404).json({ error: 'Snippet not found' })
-  }
-
-  res.json(snippet)
-})
-
-// start the server
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`)
-})
+  console.log(`Snippr is ready at http://localhost:${PORT}`);
+});
